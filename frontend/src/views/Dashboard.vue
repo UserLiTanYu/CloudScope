@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as echarts from 'echarts/core'
-import { BarChart, LineChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import {
   GridComponent,
   LegendComponent,
@@ -10,7 +10,7 @@ import {
   type TooltipComponentOption,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import type { BarSeriesOption, LineSeriesOption } from 'echarts/charts'
+import type { BarSeriesOption, LineSeriesOption, PieSeriesOption } from 'echarts/charts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { fetchDashboard, type DashboardData, type HostHealthRow } from '../api/metrics'
@@ -20,10 +20,19 @@ type ChartOption = echarts.ComposeOption<
   | GridComponentOption
   | LegendComponentOption
   | LineSeriesOption
+  | PieSeriesOption
   | TooltipComponentOption
 >
 
-echarts.use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
+echarts.use([
+  BarChart,
+  CanvasRenderer,
+  GridComponent,
+  LegendComponent,
+  LineChart,
+  PieChart,
+  TooltipComponent,
+])
 
 defineOptions({ name: 'CloudScopeDashboard' })
 
@@ -32,12 +41,19 @@ const loading = ref(true)
 const error = ref('')
 const trendChartRef = ref<HTMLDivElement | null>(null)
 const diskChartRef = ref<HTMLDivElement | null>(null)
+const locationChartRef = ref<HTMLDivElement | null>(null)
 
 let trendChart: echarts.ECharts | null = null
 let diskChart: echarts.ECharts | null = null
+let locationChart: echarts.ECharts | null = null
 
 const summary = computed(() => dashboard.value?.summary ?? [])
 const hostRows = computed(() => dashboard.value?.host_health.slice(0, 10) ?? [])
+const businessTopLists = computed(() => [
+  { title: 'CPU TOP 主机', unit: '%', rows: dashboard.value?.cpu_top ?? [] },
+  { title: '内存 TOP 主机', unit: 'MB', rows: dashboard.value?.memory_top ?? [] },
+  { title: '网络流量 TOP 主机', unit: 'MB/s', rows: dashboard.value?.network_top ?? [] },
+])
 const updatedAt = computed(() => new Date().toLocaleString('zh-CN', { hour12: false }))
 
 function formatNumber(value: number | string, digits = 2): string {
@@ -61,12 +77,13 @@ function metricValue(row: HostHealthRow, key: 'cpu_usage' | 'disk_util' | 'mem_u
 }
 
 function renderCharts(): void {
-  if (!dashboard.value || !trendChartRef.value || !diskChartRef.value) {
+  if (!dashboard.value || !trendChartRef.value || !diskChartRef.value || !locationChartRef.value) {
     return
   }
 
   trendChart ??= echarts.init(trendChartRef.value)
   diskChart ??= echarts.init(diskChartRef.value)
+  locationChart ??= echarts.init(locationChartRef.value)
 
   const trendLabels = dashboard.value.trends[0]?.points.map((point) =>
     point.collect_time.slice(5, 16).replace('T', ' '),
@@ -130,11 +147,34 @@ function renderCharts(): void {
 
   trendChart.setOption(trendOption)
   diskChart.setOption(diskOption)
+
+  const locationOption: ChartOption = {
+    color: ['#74d4b3', '#8db7ff', '#f0b35a', '#d98282', '#a78bfa'],
+    tooltip: { trigger: 'item' },
+    legend: {
+      bottom: 0,
+      textStyle: { color: '#b8c7d9' },
+    },
+    series: [
+      {
+        name: '机房分布',
+        type: 'pie',
+        radius: ['44%', '68%'],
+        center: ['50%', '44%'],
+        avoidLabelOverlap: true,
+        label: { color: '#dbe6f3' },
+        data: dashboard.value.location_distribution,
+      },
+    ],
+  }
+
+  locationChart.setOption(locationOption)
 }
 
 function resizeCharts(): void {
   trendChart?.resize()
   diskChart?.resize()
+  locationChart?.resize()
 }
 
 onMounted(async () => {
@@ -154,6 +194,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeCharts)
   trendChart?.dispose()
   diskChart?.dispose()
+  locationChart?.dispose()
 })
 </script>
 
@@ -212,6 +253,47 @@ onBeforeUnmount(() => {
           </div>
           <div
             ref="diskChartRef"
+            class="chart"
+          />
+        </article>
+
+        <article class="panel business-panel">
+          <div class="panel-heading">
+            <h2>业务指标排行</h2>
+            <span>近 24 小时聚合</span>
+          </div>
+          <div class="business-grid">
+            <section
+              v-for="group in businessTopLists"
+              :key="group.title"
+              class="rank-block"
+            >
+              <h3>{{ group.title }}</h3>
+              <div class="rank-list">
+                <div
+                  v-for="(item, index) in group.rows.slice(0, 5)"
+                  :key="`${group.title}-${item.hostid}`"
+                  class="rank-row"
+                >
+                  <span class="rank-index">{{ index + 1 }}</span>
+                  <span class="rank-host">
+                    <strong>{{ item.hostid }}</strong>
+                    <small>{{ item.hostname }}</small>
+                  </span>
+                  <span class="rank-value">{{ formatNumber(item.value) }} {{ group.unit }}</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </article>
+
+        <article class="panel location-panel">
+          <div class="panel-heading">
+            <h2>主机机房分布</h2>
+            <span>按 location1 统计</span>
+          </div>
+          <div
+            ref="locationChartRef"
             class="chart"
           />
         </article>

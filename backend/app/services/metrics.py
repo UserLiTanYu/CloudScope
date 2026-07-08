@@ -1,8 +1,12 @@
+from decimal import Decimal
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.repositories.metrics import MetricsRepository
 from app.schemas.metrics import (
     DashboardResponse,
+    DistributionItem,
     HostHealthRow,
     MetricPoint,
     MetricSeriesResponse,
@@ -17,6 +21,10 @@ TREND_METRICS = {
     "mem_used": ("内存使用", "MB"),
     "net_in": ("入站带宽", "MB/s"),
 }
+
+CPU_ALERT_THRESHOLD = Decimal("80")
+DISK_ALERT_THRESHOLD = Decimal("85")
+MEMORY_ALERT_THRESHOLD = Decimal("90000")
 
 
 class MetricsService:
@@ -40,10 +48,26 @@ class MetricsService:
         avg_cpu = self.repository.average_metric("cpu_usage")
         avg_mem = self.repository.average_metric("mem_used")
 
+        host_health = [
+            HostHealthRow(
+                hostid=row.hostid,
+                hostname=row.hostname,
+                owner=row.owner,
+                model=row.model,
+                location=f"{row.location1} / {row.location2}",
+                cpu_usage=row.cpu_usage,
+                mem_used=row.mem_used,
+                disk_util=row.disk_util,
+            )
+            for row in self.repository.host_health()
+        ]
+        alert_count = self._alert_count(host_health)
+
         summary = [
             SummaryMetric(key="host_count", label="主机数量", value=overview["host_count"]),
             SummaryMetric(key="metric_count", label="指标数量", value=overview["metric_count"]),
             SummaryMetric(key="point_count", label="采集点数", value=overview["point_count"]),
+            SummaryMetric(key="alert_count", label="资源告警", value=alert_count),
             SummaryMetric(
                 key="avg_cpu",
                 label="近 24 小时平均 CPU",
@@ -75,38 +99,65 @@ class MetricsService:
         ]
 
         disk_top = [
-            TopMetricItem(
-                hostid=row.hostid,
-                hostname=row.hostname,
-                mod=row.mod,
-                value=row.value,
-                unit=row.unit,
-            )
+            self._top_item(row.hostid, row.hostname, row.mod, row.value, row.unit)
             for row in self.repository.disk_top()
         ]
-
-        host_health = [
-            HostHealthRow(
-                hostid=row.hostid,
-                hostname=row.hostname,
-                owner=row.owner,
-                model=row.model,
-                location=f"{row.location1} / {row.location2}",
-                cpu_usage=row.cpu_usage,
-                mem_used=row.mem_used,
-                disk_util=row.disk_util,
-            )
-            for row in self.repository.host_health()
+        cpu_top = [
+            self._top_item(row.hostid, row.hostname, row.mod, row.value, row.unit)
+            for row in self.repository.metric_top("cpu_usage")
+        ]
+        memory_top = [
+            self._top_item(row.hostid, row.hostname, row.mod, row.value, row.unit)
+            for row in self.repository.metric_top("mem_used")
+        ]
+        network_top = [
+            self._top_item(row.hostid, row.hostname, "net_total", row.value, "MB/s")
+            for row in self.repository.network_top()
+        ]
+        location_distribution = [
+            DistributionItem(name=row.location1, value=row.value)
+            for row in self.repository.location_distribution()
         ]
 
         return DashboardResponse(
             summary=summary,
             trends=trends,
             disk_top=disk_top,
+            cpu_top=cpu_top,
+            memory_top=memory_top,
+            network_top=network_top,
+            location_distribution=location_distribution,
             host_health=host_health,
         )
 
-    def _format_time_range(self, time_range: object) -> str:
-        if not time_range or not time_range[0] or not time_range[1]:  # type: ignore[index]
+    def _format_time_range(self, time_range: Any) -> str:
+        if not time_range or not time_range[0] or not time_range[1]:
             return "-"
-        return f"{time_range[0]:%Y-%m-%d %H:%M} 至 {time_range[1]:%Y-%m-%d %H:%M}"  # type: ignore[index]
+        return f"{time_range[0]:%Y-%m-%d %H:%M} 至 {time_range[1]:%Y-%m-%d %H:%M}"
+
+    def _top_item(
+        self,
+        hostid: str,
+        hostname: str,
+        mod: str,
+        value: Decimal,
+        unit: str,
+    ) -> TopMetricItem:
+        return TopMetricItem(
+            hostid=hostid,
+            hostname=hostname,
+            mod=mod,
+            value=value,
+            unit=unit,
+        )
+
+    def _alert_count(self, rows: list[HostHealthRow]) -> int:
+        count = 0
+        for row in rows:
+            if row.cpu_usage is not None and row.cpu_usage > CPU_ALERT_THRESHOLD:
+                count += 1
+            if row.disk_util is not None and row.disk_util > DISK_ALERT_THRESHOLD:
+                count += 1
+            if row.mem_used is not None and row.mem_used > MEMORY_ALERT_THRESHOLD:
+                count += 1
+        return count

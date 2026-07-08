@@ -77,6 +77,66 @@ class MetricsRepository:
         )
         return list(self.db.execute(stmt))
 
+    def metric_top(self, mod: str, limit: int = 8) -> list[Row[tuple]]:
+        latest_time = self.db.scalar(
+            select(func.max(TsarDetail.collect_time)).where(TsarDetail.mod == mod)
+        )
+        if latest_time is None:
+            return []
+
+        start_time = latest_time - timedelta(hours=24)
+        stmt = (
+            select(
+                TsarDetail.hostid,
+                HostDetail.hostname,
+                TsarDetail.mod,
+                func.avg(TsarDetail.value).label("value"),
+                ModDetail.unit,
+            )
+            .join(HostDetail, HostDetail.hostid == TsarDetail.hostid)
+            .join(ModDetail, ModDetail.mod == TsarDetail.mod)
+            .where(TsarDetail.mod == mod, TsarDetail.collect_time >= start_time)
+            .group_by(TsarDetail.hostid, HostDetail.hostname, TsarDetail.mod, ModDetail.unit)
+            .order_by(func.avg(TsarDetail.value).desc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt))
+
+    def network_top(self, limit: int = 8) -> list[Row[tuple]]:
+        latest_time = self.db.scalar(
+            select(func.max(TsarDetail.collect_time)).where(
+                TsarDetail.mod.in_(["net_in", "net_out"])
+            )
+        )
+        if latest_time is None:
+            return []
+
+        start_time = latest_time - timedelta(hours=24)
+        stmt = (
+            select(
+                TsarDetail.hostid,
+                HostDetail.hostname,
+                func.sum(TsarDetail.value).label("value"),
+            )
+            .join(HostDetail, HostDetail.hostid == TsarDetail.hostid)
+            .where(
+                TsarDetail.mod.in_(["net_in", "net_out"]),
+                TsarDetail.collect_time >= start_time,
+            )
+            .group_by(TsarDetail.hostid, HostDetail.hostname)
+            .order_by(func.sum(TsarDetail.value).desc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt))
+
+    def location_distribution(self) -> list[Row[tuple]]:
+        stmt = (
+            select(HostDetail.location1, func.count().label("value"))
+            .group_by(HostDetail.location1)
+            .order_by(HostDetail.location1.asc())
+        )
+        return list(self.db.execute(stmt))
+
     def host_health(self) -> list[Row[tuple]]:
         latest_pref_time = self.db.scalar(
             select(func.max(TsarDetail.collect_time)).where(TsarDetail.type == "pref")

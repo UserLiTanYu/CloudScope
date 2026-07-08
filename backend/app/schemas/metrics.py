@@ -53,8 +53,17 @@ class HostHealthRow(BaseModel):
     disk_util: Decimal | None
 
 
+class DistributionItem(BaseModel):
+    name: str
+    value: int
+
+
 class DashboardResponse(BaseModel):
     summary: list[SummaryMetric]
     trends: list[TrendSeries]
     disk_top: list[TopMetricItem]
+    cpu_top: list[TopMetricItem]
+    memory_top: list[TopMetricItem]
+    network_top: list[TopMetricItem]
+    location_distribution: list[DistributionItem]
     host_health: list[HostHealthRow]

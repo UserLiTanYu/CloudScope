@@ -85,7 +85,7 @@ h2 {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-top: 18px;
 }
@@ -141,8 +141,16 @@ h2 {
   min-height: 410px;
 }
 
+.business-panel,
 .host-panel {
   grid-column: 1 / -1;
+}
+
+.business-panel {
+  min-height: 300px;
+}
+
+.location-panel {
   min-height: 320px;
 }
 
@@ -166,6 +174,82 @@ h2 {
 
 .trend-panel .chart {
   height: 360px;
+}
+
+.business-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.rank-block {
+  min-height: 220px;
+  padding: 14px;
+  border: 1px solid rgba(232, 238, 248, 0.08);
+  border-radius: 8px;
+  background: rgba(232, 238, 248, 0.04);
+}
+
+.rank-block h3 {
+  margin: 0 0 12px;
+  color: #e8eef8;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.rank-list {
+  display: grid;
+  gap: 8px;
+}
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+}
+
+.rank-index {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 6px;
+  color: #10151b;
+  background: #74d4b3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rank-host {
+  min-width: 0;
+}
+
+.rank-host strong,
+.rank-host small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-host strong {
+  color: #e8eef8;
+  font-size: 13px;
+}
+
+.rank-host small {
+  margin-top: 2px;
+  color: #8fa1b7;
+  font-size: 11px;
+}
+
+.rank-value {
+  color: #f0b35a;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .host-table {
@@ -225,6 +309,10 @@ h2 {
   }
 
   .screen-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .business-grid {
     grid-template-columns: 1fr;
   }
 }

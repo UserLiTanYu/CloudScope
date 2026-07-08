@@ -43,10 +43,19 @@ export interface HostHealthRow {
   disk_util: string | null
 }
 
+export interface DistributionItem {
+  name: string
+  value: number
+}
+
 export interface DashboardData {
   summary: SummaryMetric[]
   trends: TrendSeries[]
   disk_top: TopMetricItem[]
+  cpu_top: TopMetricItem[]
+  memory_top: TopMetricItem[]
+  network_top: TopMetricItem[]
+  location_distribution: DistributionItem[]
   host_health: HostHealthRow[]
 }
 
