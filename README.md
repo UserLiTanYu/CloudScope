@@ -14,17 +14,32 @@ CloudScope 是一个基于监控采集数据的可视化大屏项目，用于实
 
 ## 快速启动
 
-### 方式一：Docker Compose（推荐）
+### 方式一：Docker 一键部署（推荐）
 
 ```bash
 # 1. 克隆项目
 git clone git@github.com:UserLiTanYu/CloudScope.git
 cd CloudScope
 
-# 2. 启动 MySQL
+# 2. 一键启动所有服务
+docker compose up -d
+
+# 3. 访问前端大屏
+# 浏览器打开 http://localhost
+```
+
+**服务说明：**
+- MySQL：端口 3307，数据自动导入
+- 后端 API：端口 8000，自动连接数据库
+- 前端：端口 80，自动代理 API 请求
+
+### 方式二：本地开发模式
+
+```bash
+# 1. 启动 MySQL
 docker compose up -d mysql
 
-# 3. 启动后端
+# 2. 启动后端
 cd backend
 python -m venv .venv
 .venv\Scripts\activate  # Windows
@@ -33,33 +48,7 @@ pip install -r requirements.txt
 cp .env.example .env  # 配置数据库连接
 uvicorn app.main:app --reload
 
-# 4. 导入数据
-python -m etl.jobs.import_data
-
-# 5. 启动前端
-cd ../frontend
-npm install
-npm run dev
-```
-
-### 方式二：手动配置 MySQL
-
-```bash
-# 1. 创建数据库并初始化表结构
-mysql -uroot -p < database/schema.sql
-
-# 2. 配置后端环境变量
-cd backend
-cp .env.example .env
-# 编辑 .env 文件，配置 MySQL 连接信息
-
-# 3. 启动后端服务
-uvicorn app.main:app --reload
-
-# 4. 导入数据
-python -m etl.jobs.import_data --data-dir "/path/to/your/data"
-
-# 5. 启动前端
+# 3. 启动前端
 cd ../frontend
 npm install
 npm run dev
@@ -67,7 +56,7 @@ npm run dev
 
 ### 访问地址
 
-- **前端大屏**：http://127.0.0.1:5173
+- **前端大屏**：http://localhost（Docker）或 http://127.0.0.1:5173（开发模式）
 - **后端 API**：http://127.0.0.1:8000
 - **API 文档**：http://127.0.0.1:8000/docs
 - **健康检查**：http://127.0.0.1:8000/api/health

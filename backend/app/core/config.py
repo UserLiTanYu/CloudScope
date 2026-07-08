@@ -10,13 +10,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: Path = Path("../logs")
 
-    mysql_host: str = "127.0.0.1"
+    mysql_host: str = "mysql"
     mysql_port: int = 3306
     mysql_user: str = "cloudscope"
     mysql_password: str = "cloudscope"
     mysql_database: str = "cloudscope"
 
-    source_data_dir: Path = Path(r"C:\Users\litan\Desktop\code\可视化大屏\数据")
+    source_data_dir: Path = Path("/app/data")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
