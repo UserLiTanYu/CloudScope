@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
 
 # Build output
 dist/
@@ -36,6 +40,9 @@ Thumbs.db
 # Test and coverage
 coverage/
 *.lcov
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Temporary files
 tmp/

@@ -1,63 +1,143 @@
-# 云瞰视屏 CloudScope
+# CloudScope
 
-云瞰视屏（CloudScope）是一个面向数据可视化大屏、运营监控和智慧中枢场景的前端项目。项目目标是通过清晰的工程结构、稳定的可视化能力和可复用的组件体系，帮助开发者快速搭建专业、可扩展的数据大屏应用。
+CloudScope 是一个基于监控采集数据的可视化大屏项目。当前采用方案 1：
 
-## 项目简介
+```text
+Vue 3 + TypeScript + Vite + ECharts
+FastAPI + SQLAlchemy + Python ETL
+MySQL 8
+pytest + Vitest
+ruff + ESLint + Prettier
+```
 
-CloudScope 聚焦实时数据展示、业务指标监控、趋势分析、空间态势感知和管理驾驶舱等典型场景。项目适合作为前端初学者学习数据大屏工程化的起点，也可以逐步扩展为企业级可视化项目模板。
+## 数据来源
 
-## 项目定位
+默认读取目录：
 
-- 数据可视化大屏项目基础工程
-- 前端工程化学习与实践项目
-- 运营监控、智慧园区、云平台监控等场景的展示底座
-- 可持续扩展的组件化大屏开发模板
+```text
+C:\Users\litan\Desktop\code\可视化大屏\数据
+```
 
-## 推荐技术方向
+包含：
 
-- 构建工具：Vite
-- 前端框架：Vue 3 或 React
-- 开发语言：TypeScript
-- 可视化图表：ECharts
-- 状态管理：Pinia、Zustand 或同类轻量方案
-- 样式方案：CSS Modules、Less、Sass 或 Tailwind CSS
-- 代码规范：ESLint、Prettier
-- 包管理器：pnpm
+- `host_detail.dat`：主机维表
+- `mod_detail.dat`：指标字典维表
+- `disk_tsar.dat`：磁盘采集明细
+- `pref_tsar.dat`：性能采集明细
 
-## 建议目录结构
+## 项目结构
 
 ```text
 CloudScope/
-├── public/              # 静态资源
-├── src/
-│   ├── assets/          # 图片、字体、图标等资源
-│   ├── components/      # 通用组件
-│   ├── views/           # 页面视图
-│   ├── charts/          # 图表组件与配置
-│   ├── layouts/         # 页面布局
-│   ├── services/        # 接口请求与数据服务
-│   ├── stores/          # 状态管理
-│   ├── utils/           # 工具函数
-│   ├── styles/          # 全局样式与主题变量
-│   └── main.ts          # 应用入口
-├── .gitignore
-├── LICENSE
-├── README.md
-├── package.json
-└── vite.config.ts
+├─ backend/
+│  ├─ app/                  # FastAPI 应用
+│  │  ├─ api/               # HTTP 接口
+│  │  ├─ core/              # 配置、数据库、日志
+│  │  ├─ models/            # SQLAlchemy 模型
+│  │  ├─ repositories/      # 数据访问层
+│  │  ├─ schemas/           # Pydantic 响应模型
+│  │  └─ services/          # 业务服务层
+│  ├─ etl/                  # 数据加工入库
+│  │  ├─ readers/           # 文件读取
+│  │  ├─ transformers/      # 数据清洗转换
+│  │  ├─ loaders/           # MySQL 写入
+│  │  └─ jobs/              # 导入任务入口
+│  └─ tests/                # 后端测试
+├─ frontend/
+│  ├─ src/
+│  │  ├─ api/
+│  │  ├─ charts/
+│  │  ├─ components/
+│  │  ├─ stores/
+│  │  ├─ styles/
+│  │  └─ views/
+│  └─ tests/
+├─ database/
+│  ├─ schema.sql
+│  └─ migrations/
+├─ logs/
+└─ docker-compose.yml
 ```
 
-## 后续开发计划
+## 启动 MySQL
 
-- 初始化 Vite 前端工程
-- 搭建基础大屏布局与自适应方案
-- 接入 ECharts 并封装通用图表组件
-- 增加模拟数据与接口服务层
-- 建立主题变量、颜色规范和视觉风格
-- 完成核心大屏页面示例
-- 增加代码规范、格式化和基础构建脚本
-- 补充部署说明和二次开发文档
+```bash
+docker compose up -d mysql
+```
 
-## 开源协议说明
+如果不使用 Docker，也可以手动执行：
 
-本项目采用 MIT License 开源协议。你可以自由使用、复制、修改、合并、发布和分发本项目代码，但需要保留原始版权声明和协议文本。
+```bash
+mysql -uroot -p < database/schema.sql
+```
+
+## 后端开发
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+uvicorn app.main:app --reload
+```
+
+健康检查：
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## 导入数据
+
+```bash
+cd backend
+python -m etl.jobs.import_data
+```
+
+也可以指定数据目录：
+
+```bash
+python -m etl.jobs.import_data --data-dir "C:\Users\litan\Desktop\code\可视化大屏\数据"
+```
+
+## 前端开发
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+## 测试与代码质量
+
+后端：
+
+```bash
+cd backend
+pytest
+pytest --cov=app --cov=etl --cov-report=term-missing
+ruff check .
+mypy .
+```
+
+前端：
+
+```bash
+cd frontend
+npm run test
+npm run lint
+npm run build
+```
+
+日志默认写入：
+
+```text
+logs/cloudscope.log
+```

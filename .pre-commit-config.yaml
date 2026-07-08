@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: backend-ruff
+        name: backend ruff
+        entry: ruff check backend
+        language: system
+        pass_filenames: false
+      - id: backend-pytest
+        name: backend pytest
+        entry: pytest backend
+        language: system
+        pass_filenames: false
