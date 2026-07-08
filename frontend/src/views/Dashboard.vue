@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as echarts from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, GaugeChart, LineChart, PieChart } from 'echarts/charts'
 import {
   GridComponent,
   LegendComponent,
@@ -10,13 +10,19 @@ import {
   type TooltipComponentOption,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import type { BarSeriesOption, LineSeriesOption, PieSeriesOption } from 'echarts/charts'
+import type {
+  BarSeriesOption,
+  GaugeSeriesOption,
+  LineSeriesOption,
+  PieSeriesOption,
+} from 'echarts/charts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { fetchDashboard, type DashboardData, type HostHealthRow } from '../api/metrics'
 
 type ChartOption = echarts.ComposeOption<
   | BarSeriesOption
+  | GaugeSeriesOption
   | GridComponentOption
   | LegendComponentOption
   | LineSeriesOption
@@ -27,6 +33,7 @@ type ChartOption = echarts.ComposeOption<
 echarts.use([
   BarChart,
   CanvasRenderer,
+  GaugeChart,
   GridComponent,
   LegendComponent,
   LineChart,
@@ -39,28 +46,156 @@ defineOptions({ name: 'CloudScopeDashboard' })
 const dashboard = ref<DashboardData | null>(null)
 const loading = ref(true)
 const error = ref('')
-const trendChartRef = ref<HTMLDivElement | null>(null)
-const diskChartRef = ref<HTMLDivElement | null>(null)
-const locationChartRef = ref<HTMLDivElement | null>(null)
+const currentTime = ref(new Date().toLocaleString('zh-CN', { hour12: false }))
 
+const idcDistChartRef = ref<HTMLDivElement | null>(null)
+const hwModelChartRef = ref<HTMLDivElement | null>(null)
+const riskRankChartRef = ref<HTMLDivElement | null>(null)
+const trendChartRef = ref<HTMLDivElement | null>(null)
+const healthGaugeRef = ref<HTMLDivElement | null>(null)
+const networkChartRef = ref<HTMLDivElement | null>(null)
+const diskTopChartRef = ref<HTMLDivElement | null>(null)
+
+let idcDistChart: echarts.ECharts | null = null
+let hwModelChart: echarts.ECharts | null = null
+let riskRankChart: echarts.ECharts | null = null
 let trendChart: echarts.ECharts | null = null
-let diskChart: echarts.ECharts | null = null
-let locationChart: echarts.ECharts | null = null
+let healthGauge: echarts.ECharts | null = null
+let networkChart: echarts.ECharts | null = null
+let diskTopChart: echarts.ECharts | null = null
+let clockInterval: ReturnType<typeof setInterval> | null = null
+let resizeTimeout: ReturnType<typeof setTimeout> | null = null
 
 const summary = computed(() => dashboard.value?.summary ?? [])
-const hostRows = computed(() => dashboard.value?.host_health.slice(0, 10) ?? [])
-const businessTopLists = computed(() => [
-  { title: 'CPU TOP 主机', unit: '%', rows: dashboard.value?.cpu_top ?? [] },
-  { title: '内存 TOP 主机', unit: 'MB', rows: dashboard.value?.memory_top ?? [] },
-  { title: '网络流量 TOP 主机', unit: 'MB/s', rows: dashboard.value?.network_top ?? [] },
-])
-const updatedAt = computed(() => new Date().toLocaleString('zh-CN', { hour12: false }))
+const hostHealthAll = computed(() => dashboard.value?.host_health ?? [])
+
+const healthScore = computed(() => {
+  const rows = dashboard.value?.host_health ?? []
+  if (rows.length === 0) return 0
+  const healthy = rows.filter((r) => {
+    const cpuOk = r.cpu_usage === null || Number(r.cpu_usage) <= 80
+    const diskOk = r.disk_util === null || Number(r.disk_util) <= 85
+    const memOk = r.mem_used === null || Number(r.mem_used) <= 90000
+    return cpuOk && diskOk && memOk
+  }).length
+  return Math.round((healthy / rows.length) * 100)
+})
+
+const modelDistribution = computed(() => {
+  const rows = dashboard.value?.host_health ?? []
+  const map = new Map<string, number>()
+  for (const row of rows) {
+    const key = row.model || 'Unknown'
+    map.set(key, (map.get(key) ?? 0) + 1)
+  }
+  return Array.from(map.entries())
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+})
+
+const riskRankData = computed(() => {
+  const d = dashboard.value
+  if (!d) return []
+  const scores = new Map<
+    string,
+    { hostid: string; hostname: string; cpu: number; mem: number; net: number }
+  >()
+  for (const item of d.cpu_top) {
+    scores.set(item.hostid, {
+      hostid: item.hostid,
+      hostname: item.hostname,
+      cpu: Number(item.value),
+      mem: 0,
+      net: 0,
+    })
+  }
+  for (const item of d.memory_top) {
+    const entry = scores.get(item.hostid) ?? {
+      hostid: item.hostid,
+      hostname: item.hostname,
+      cpu: 0,
+      mem: 0,
+      net: 0,
+    }
+    entry.mem = Number(item.value)
+    scores.set(item.hostid, entry)
+  }
+  for (const item of d.network_top) {
+    const entry = scores.get(item.hostid) ?? {
+      hostid: item.hostid,
+      hostname: item.hostname,
+      cpu: 0,
+      mem: 0,
+      net: 0,
+    }
+    entry.net = Number(item.value)
+    scores.set(item.hostid, entry)
+  }
+  return Array.from(scores.values())
+    .map((s) => ({
+      hostid: s.hostid,
+      hostname: s.hostname,
+      riskScore: s.cpu + s.mem / 1280 + s.net * 2,
+    }))
+    .sort((a, b) => b.riskScore - a.riskScore)
+    .slice(0, 10)
+})
+
+const alarmStream = computed(() => {
+  const rows = dashboard.value?.host_health ?? []
+  const alarms: Array<{
+    hostid: string
+    hostname: string
+    type: string
+    value: string
+    severity: 'critical' | 'warning'
+  }> = []
+  for (const row of rows) {
+    if (row.cpu_usage !== null && Number(row.cpu_usage) > 80) {
+      alarms.push({
+        hostid: row.hostid,
+        hostname: row.hostname,
+        type: 'CPU',
+        value: `${formatNumber(row.cpu_usage)}%`,
+        severity: Number(row.cpu_usage) > 95 ? 'critical' : 'warning',
+      })
+    }
+    if (row.disk_util !== null && Number(row.disk_util) > 85) {
+      alarms.push({
+        hostid: row.hostid,
+        hostname: row.hostname,
+        type: 'Disk',
+        value: `${formatNumber(row.disk_util)}%`,
+        severity: Number(row.disk_util) > 95 ? 'critical' : 'warning',
+      })
+    }
+    if (row.mem_used !== null && Number(row.mem_used) > 90000) {
+      alarms.push({
+        hostid: row.hostid,
+        hostname: row.hostname,
+        type: 'Memory',
+        value: `${formatNumber(row.mem_used)} MB`,
+        severity: Number(row.mem_used) > 110000 ? 'critical' : 'warning',
+      })
+    }
+  }
+  return alarms.sort((a) => (a.severity === 'critical' ? -1 : 1))
+})
+
+const networkTrafficData = computed(() => {
+  const d = dashboard.value
+  if (!d) return { labels: [], values: [] }
+  const netSeries = d.trends.find((t) => t.name === '入站带宽')
+  if (!netSeries) return { labels: [], values: [] }
+  return {
+    labels: netSeries.points.map((p) => p.collect_time.slice(11, 16)),
+    values: netSeries.points.map((p) => Number(p.value)),
+  }
+})
 
 function formatNumber(value: number | string, digits = 2): string {
   const numberValue = Number(value)
-  if (!Number.isFinite(numberValue)) {
-    return String(value)
-  }
+  if (!Number.isFinite(numberValue)) return String(value)
   return numberValue.toLocaleString('zh-CN', {
     maximumFractionDigits: digits,
     minimumFractionDigits: numberValue % 1 === 0 ? 0 : digits,
@@ -69,112 +204,316 @@ function formatNumber(value: number | string, digits = 2): string {
 
 function metricValue(row: HostHealthRow, key: 'cpu_usage' | 'disk_util' | 'mem_used'): string {
   const value = row[key]
-  if (value === null) {
-    return '-'
-  }
+  if (value === null) return '-'
   const suffix = key === 'mem_used' ? ' MB' : '%'
   return `${formatNumber(value)}${suffix}`
 }
 
+function healthClass(row: HostHealthRow): string {
+  const cpu = row.cpu_usage !== null ? Number(row.cpu_usage) : 0
+  const disk = row.disk_util !== null ? Number(row.disk_util) : 0
+  const mem = row.mem_used !== null ? Number(row.mem_used) : 0
+  if (cpu > 95 || disk > 95 || mem > 110000) return 'critical'
+  if (cpu > 80 || disk > 85 || mem > 90000) return 'warning'
+  return 'healthy'
+}
+
+const chartInstances = computed(() =>
+  [
+    idcDistChart,
+    hwModelChart,
+    riskRankChart,
+    trendChart,
+    healthGauge,
+    networkChart,
+    diskTopChart,
+  ].filter(Boolean) as echarts.ECharts[],
+)
+
 function renderCharts(): void {
-  if (!dashboard.value || !trendChartRef.value || !diskChartRef.value || !locationChartRef.value) {
-    return
-  }
+  if (!dashboard.value) return
 
-  trendChart ??= echarts.init(trendChartRef.value)
-  diskChart ??= echarts.init(diskChartRef.value)
-  locationChart ??= echarts.init(locationChartRef.value)
+  const neonColors = ['#00f0ff', '#74d4b3', '#f0b35a', '#a78bfa', '#ff6b9d', '#d98282']
+  const axisLineColor = '#344252'
+  const gridLineColor = 'rgba(148, 163, 184, 0.12)'
+  const labelColor = '#94a3b8'
 
-  const trendLabels = dashboard.value.trends[0]?.points.map((point) =>
-    point.collect_time.slice(5, 16).replace('T', ' '),
-  )
-
-  const trendOption: ChartOption = {
-    color: ['#74d4b3', '#8db7ff', '#f0b35a'],
-    tooltip: { trigger: 'axis' },
-    legend: {
-      top: 0,
-      textStyle: { color: '#b8c7d9' },
-    },
-    grid: { left: 44, right: 18, top: 44, bottom: 34 },
-    xAxis: {
-      type: 'category',
-      data: trendLabels,
-      axisLine: { lineStyle: { color: '#344252' } },
-      axisLabel: { color: '#94a3b8' },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.14)' } },
-      axisLabel: { color: '#94a3b8' },
-    },
-    series: dashboard.value.trends.map((series) => ({
-      name: series.name,
-      type: 'line',
-      smooth: true,
-      showSymbol: false,
-      data: series.points.map((point) => Number(point.value)),
-    })),
-  }
-
-  const diskItems = dashboard.value.disk_top
-  const diskOption: ChartOption = {
-    color: ['#74d4b3'],
-    tooltip: { trigger: 'axis' },
-    grid: { left: 92, right: 24, top: 12, bottom: 20 },
-    xAxis: {
-      type: 'value',
-      axisLabel: { color: '#94a3b8' },
-      splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.14)' } },
-    },
-    yAxis: {
-      type: 'category',
-      data: diskItems.map((item) => `${item.hostid} ${item.mod}`),
-      inverse: true,
-      axisLabel: { color: '#c7d2e1', width: 84, overflow: 'truncate' },
-      axisLine: { lineStyle: { color: '#344252' } },
-    },
-    series: [
-      {
-        name: '磁盘利用率',
-        type: 'bar',
-        data: diskItems.map((item) => Number(item.value)),
-        barWidth: 12,
-        itemStyle: { borderRadius: [0, 4, 4, 0] },
+  // IDC Distribution Donut
+  if (idcDistChartRef.value) {
+    idcDistChart ??= echarts.init(idcDistChartRef.value)
+    idcDistChart.setOption({
+      color: neonColors,
+      tooltip: { trigger: 'item' },
+      legend: {
+        orient: 'vertical',
+        right: 8,
+        top: 'center',
+        itemGap: 12,
+        textStyle: { color: '#b8c7d9', fontSize: 12 },
       },
-    ],
+      series: [
+        {
+          name: 'IDC Distribution',
+          type: 'pie',
+          radius: ['44%', '68%'],
+          center: ['34%', '52%'],
+          avoidLabelOverlap: true,
+          label: { show: false },
+          emphasis: {
+            itemStyle: { shadowBlur: 20, shadowColor: 'rgba(0, 240, 255, 0.5)' },
+          },
+          data: dashboard.value.location_distribution,
+        },
+      ],
+    } as ChartOption)
   }
 
-  trendChart.setOption(trendOption)
-  diskChart.setOption(diskOption)
-
-  const locationOption: ChartOption = {
-    color: ['#74d4b3', '#8db7ff', '#f0b35a', '#d98282', '#a78bfa'],
-    tooltip: { trigger: 'item' },
-    legend: {
-      bottom: 0,
-      textStyle: { color: '#b8c7d9' },
-    },
-    series: [
-      {
-        name: '机房分布',
-        type: 'pie',
-        radius: ['44%', '68%'],
-        center: ['50%', '44%'],
-        avoidLabelOverlap: true,
-        label: { color: '#dbe6f3' },
-        data: dashboard.value.location_distribution,
+  // Hardware Models Donut
+  if (hwModelChartRef.value) {
+    hwModelChart ??= echarts.init(hwModelChartRef.value)
+    hwModelChart.setOption({
+      color: neonColors,
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      legend: {
+        orient: 'vertical',
+        right: 8,
+        top: 'center',
+        itemGap: 10,
+        textStyle: { color: '#b8c7d9', fontSize: 12 },
       },
-    ],
+      series: [
+        {
+          name: 'Hardware Models',
+          type: 'pie',
+          radius: ['42%', '66%'],
+          center: ['34%', '52%'],
+          avoidLabelOverlap: true,
+          label: { show: false },
+          emphasis: {
+            itemStyle: { shadowBlur: 20, shadowColor: 'rgba(0, 240, 255, 0.5)' },
+          },
+          data: modelDistribution.value,
+        },
+      ],
+    } as ChartOption)
   }
 
-  locationChart.setOption(locationOption)
+  // Risk Ranking TOP10
+  if (riskRankChartRef.value) {
+    riskRankChart ??= echarts.init(riskRankChartRef.value)
+    riskRankChart.setOption({
+      color: ['#ff6b9d'],
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 92, right: 28, top: 18, bottom: 32 },
+      xAxis: {
+        type: 'value',
+        axisLabel: { color: labelColor },
+        splitLine: { lineStyle: { color: gridLineColor } },
+      },
+      yAxis: {
+        type: 'category',
+        data: riskRankData.value.map((r) => r.hostid),
+        inverse: true,
+        axisLabel: { color: '#c7d2e1', fontSize: 12 },
+        axisLine: { lineStyle: { color: axisLineColor } },
+      },
+      series: [
+        {
+          name: 'Risk Score',
+          type: 'bar',
+          data: riskRankData.value.map((r) => Number(r.riskScore.toFixed(1))),
+          barWidth: 14,
+          itemStyle: {
+            borderRadius: [0, 4, 4, 0],
+            color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+              { offset: 0, color: '#ff6b9d' },
+              { offset: 1, color: '#d98282' },
+            ]),
+          },
+        },
+      ],
+    } as ChartOption)
+  }
+
+  // Core Metrics Trend
+  if (trendChartRef.value) {
+    trendChart ??= echarts.init(trendChartRef.value)
+    const trendLabels = dashboard.value.trends[0]?.points.map((point) =>
+      point.collect_time.slice(5, 16).replace('T', ' '),
+    )
+    trendChart.setOption({
+      color: ['#00f0ff', '#74d4b3', '#f0b35a'],
+      tooltip: { trigger: 'axis' },
+      legend: {
+        top: 0,
+        itemGap: 18,
+        textStyle: { color: '#b8c7d9', fontSize: 12 },
+      },
+      grid: { left: 64, right: 26, top: 58, bottom: 44 },
+      xAxis: {
+        type: 'category',
+        data: trendLabels,
+        axisLine: { lineStyle: { color: axisLineColor } },
+        axisLabel: { color: labelColor, fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value',
+        splitLine: { lineStyle: { color: gridLineColor } },
+        axisLabel: { color: labelColor },
+      },
+      series: dashboard.value.trends.map((series) => ({
+        name: series.name,
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(0, 240, 255, 0.25)' },
+            { offset: 1, color: 'rgba(0, 240, 255, 0.02)' },
+          ]),
+        },
+        data: series.points.map((point) => Number(point.value)),
+      })),
+    } as ChartOption)
+  }
+
+  // Health Gauge
+  if (healthGaugeRef.value) {
+    healthGauge ??= echarts.init(healthGaugeRef.value)
+    healthGauge.setOption({
+      series: [
+        {
+          type: 'gauge',
+          startAngle: 220,
+          endAngle: -40,
+          min: 0,
+          max: 100,
+          splitNumber: 10,
+          radius: '82%',
+          axisLine: {
+            lineStyle: {
+              width: 12,
+              color: [
+                [0.3, '#d98282'],
+                [0.7, '#f0b35a'],
+                [1, '#74d4b3'],
+              ],
+            },
+          },
+          pointer: {
+            itemStyle: { color: '#e8eef8' },
+            length: '60%',
+            width: 6,
+          },
+          axisTick: { distance: -12, length: 6, lineStyle: { color: '#fff', width: 1 } },
+          splitLine: { distance: -14, length: 14, lineStyle: { color: '#fff', width: 2 } },
+          axisLabel: { color: labelColor, distance: 18, fontSize: 10 },
+          detail: {
+            valueAnimation: true,
+            formatter: '{value}%',
+            color: '#e8eef8',
+            fontSize: 30,
+            fontWeight: 700,
+            offsetCenter: [0, '58%'],
+          },
+          title: {
+            offsetCenter: [0, '78%'],
+            color: '#94a3b8',
+            fontSize: 12,
+          },
+          data: [{ value: healthScore.value, name: 'Healthy Hosts' }],
+        },
+      ],
+    })
+  }
+
+  // Network Traffic 24H
+  if (networkChartRef.value) {
+    networkChart ??= echarts.init(networkChartRef.value)
+    networkChart.setOption({
+      color: ['#00f0ff'],
+      tooltip: { trigger: 'axis' },
+      grid: { left: 54, right: 22, top: 28, bottom: 38 },
+      xAxis: {
+        type: 'category',
+        data: networkTrafficData.value.labels,
+        axisLine: { lineStyle: { color: axisLineColor } },
+        axisLabel: { color: labelColor, fontSize: 11 },
+        boundaryGap: false,
+      },
+      yAxis: {
+        type: 'value',
+        name: 'MB/s',
+        nameTextStyle: { color: labelColor },
+        splitLine: { lineStyle: { color: gridLineColor } },
+        axisLabel: { color: labelColor },
+      },
+      series: [
+        {
+          name: 'Inbound',
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          data: networkTrafficData.value.values,
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(0, 240, 255, 0.35)' },
+              { offset: 1, color: 'rgba(0, 240, 255, 0.02)' },
+            ]),
+          },
+          lineStyle: { width: 2 },
+        },
+      ],
+    } as ChartOption)
+  }
+
+  // Disk TOP10
+  if (diskTopChartRef.value) {
+    diskTopChart ??= echarts.init(diskTopChartRef.value)
+    const diskItems = dashboard.value.disk_top
+    diskTopChart.setOption({
+      color: ['#00f0ff'],
+      tooltip: { trigger: 'axis' },
+      grid: { left: 104, right: 28, top: 18, bottom: 36 },
+      xAxis: {
+        type: 'value',
+        axisLabel: { color: labelColor },
+        splitLine: { lineStyle: { color: gridLineColor } },
+      },
+      yAxis: {
+        type: 'category',
+        data: diskItems.map((item) => `${item.hostid} ${item.mod}`),
+        inverse: true,
+        axisLabel: { color: '#c7d2e1', width: 84, overflow: 'truncate' },
+        axisLine: { lineStyle: { color: axisLineColor } },
+      },
+      series: [
+        {
+          name: 'Disk Usage',
+          type: 'bar',
+          data: diskItems.map((item) => Number(item.value)),
+          barWidth: 12,
+          itemStyle: {
+            borderRadius: [0, 4, 4, 0],
+            color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+              { offset: 0, color: '#00f0ff' },
+              { offset: 1, color: '#74d4b3' },
+            ]),
+          },
+        },
+      ],
+    } as ChartOption)
+  }
 }
 
 function resizeCharts(): void {
-  trendChart?.resize()
-  diskChart?.resize()
-  locationChart?.resize()
+  if (resizeTimeout) clearTimeout(resizeTimeout)
+  resizeTimeout = setTimeout(() => {
+    for (const chart of chartInstances.value) {
+      chart.resize()
+    }
+  }, 200)
 }
 
 onMounted(async () => {
@@ -183,6 +522,9 @@ onMounted(async () => {
     await nextTick()
     renderCharts()
     window.addEventListener('resize', resizeCharts)
+    clockInterval = setInterval(() => {
+      currentTime.value = new Date().toLocaleString('zh-CN', { hour12: false })
+    }, 1000)
   } catch {
     error.value = '数据加载失败，请确认后端 API 与 MySQL 已启动'
   } finally {
@@ -192,25 +534,39 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeCharts)
+  if (clockInterval) clearInterval(clockInterval)
+  if (resizeTimeout) clearTimeout(resizeTimeout)
+  idcDistChart?.dispose()
+  hwModelChart?.dispose()
+  riskRankChart?.dispose()
   trendChart?.dispose()
-  diskChart?.dispose()
-  locationChart?.dispose()
+  healthGauge?.dispose()
+  networkChart?.dispose()
+  diskTopChart?.dispose()
 })
 </script>
 
 <template>
   <main class="dashboard">
-    <header class="topbar">
-      <div>
+    <header class="noc-topbar">
+      <div class="noc-title">
         <p class="eyebrow">
-          CloudScope
+          CLOUDSCOPE
         </p>
-        <h1>云监控可视化大屏</h1>
+        <h1>云监控 NOC 大屏</h1>
       </div>
-      <div class="runtime">
-        <span :class="['status-dot', { loading }]" />
-        <span>{{ loading ? '加载中' : '实时数据已连接' }}</span>
-        <strong>{{ updatedAt }}</strong>
+      <div class="noc-clock">
+        {{ currentTime }}
+      </div>
+      <div class="noc-badges">
+        <div
+          v-for="item in summary.slice(0, 5)"
+          :key="item.key"
+          class="noc-badge"
+        >
+          <strong>{{ formatNumber(item.value) }}</strong>
+          <span>{{ item.label }}</span>
+        </div>
       </div>
     </header>
 
@@ -222,111 +578,128 @@ onBeforeUnmount(() => {
     </section>
 
     <template v-else>
-      <section class="summary-grid">
-        <article
-          v-for="item in summary"
-          :key="item.key"
-          class="summary-tile"
-        >
-          <span>{{ item.label }}</span>
-          <strong>{{ formatNumber(item.value) }}</strong>
-          <em v-if="item.unit">{{ item.unit }}</em>
-        </article>
-      </section>
-
-      <section class="screen-grid">
-        <article class="panel trend-panel">
-          <div class="panel-heading">
-            <h2>核心指标趋势</h2>
-            <span>近 24 小时平均值</span>
-          </div>
-          <div
-            ref="trendChartRef"
-            class="chart"
-          />
-        </article>
-
-        <article class="panel">
-          <div class="panel-heading">
-            <h2>磁盘利用率 TOP</h2>
-            <span>最新采集批次</span>
-          </div>
-          <div
-            ref="diskChartRef"
-            class="chart"
-          />
-        </article>
-
-        <article class="panel business-panel">
-          <div class="panel-heading">
-            <h2>业务指标排行</h2>
-            <span>近 24 小时聚合</span>
-          </div>
-          <div class="business-grid">
-            <section
-              v-for="group in businessTopLists"
-              :key="group.title"
-              class="rank-block"
-            >
-              <h3>{{ group.title }}</h3>
-              <div class="rank-list">
-                <div
-                  v-for="(item, index) in group.rows.slice(0, 5)"
-                  :key="`${group.title}-${item.hostid}`"
-                  class="rank-row"
-                >
-                  <span class="rank-index">{{ index + 1 }}</span>
-                  <span class="rank-host">
-                    <strong>{{ item.hostid }}</strong>
-                    <small>{{ item.hostname }}</small>
-                  </span>
-                  <span class="rank-value">{{ formatNumber(item.value) }} {{ group.unit }}</span>
-                </div>
-              </div>
-            </section>
-          </div>
-        </article>
-
-        <article class="panel location-panel">
-          <div class="panel-heading">
-            <h2>主机机房分布</h2>
-            <span>按 location1 统计</span>
-          </div>
-          <div
-            ref="locationChartRef"
-            class="chart"
-          />
-        </article>
-
-        <article class="panel host-panel">
-          <div class="panel-heading">
-            <h2>主机健康明细</h2>
-            <span>近 24 小时聚合</span>
-          </div>
-          <div class="host-table">
-            <div class="host-table-head">
-              <span>主机</span>
-              <span>位置</span>
-              <span>CPU</span>
-              <span>内存</span>
-              <span>磁盘</span>
+      <section class="noc-grid">
+        <!-- LEFT COLUMN -->
+        <div class="noc-col noc-col-left">
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>机房分布</h2>
+              <span>IDC Distribution</span>
             </div>
             <div
-              v-for="row in hostRows"
-              :key="row.hostid"
-              class="host-row"
-            >
-              <span>
-                <strong>{{ row.hostid }}</strong>
-                <small>{{ row.hostname }}</small>
-              </span>
-              <span>{{ row.location }}</span>
-              <span>{{ metricValue(row, 'cpu_usage') }}</span>
-              <span>{{ metricValue(row, 'mem_used') }}</span>
-              <span>{{ metricValue(row, 'disk_util') }}</span>
+              ref="idcDistChartRef"
+              class="chart"
+            />
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>硬件型号分布</h2>
+              <span>Server Models</span>
             </div>
-          </div>
-        </article>
+            <div
+              ref="hwModelChartRef"
+              class="chart"
+            />
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>风险排行 TOP10</h2>
+              <span>Risk Ranking</span>
+            </div>
+            <div
+              ref="riskRankChartRef"
+              class="chart"
+            />
+          </article>
+        </div>
+
+        <!-- CENTER COLUMN -->
+        <div class="noc-col noc-col-center">
+          <article class="panel panel-tall">
+            <div class="panel-heading">
+              <h2>核心指标 7 日走势</h2>
+              <span>7 Days x 24 Hours Trend</span>
+            </div>
+            <div
+              ref="trendChartRef"
+              class="chart chart-tall"
+            />
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>今日健康仪表盘</h2>
+              <span>Health Gauge</span>
+            </div>
+            <div
+              ref="healthGaugeRef"
+              class="chart"
+            />
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>主机健康矩阵</h2>
+              <span>Host Health Matrix</span>
+            </div>
+            <div class="host-matrix-grid">
+              <div
+                v-for="row in hostHealthAll"
+                :key="row.hostid"
+                :class="['matrix-cell', healthClass(row)]"
+                :title="`${row.hostname}: CPU ${metricValue(row, 'cpu_usage')}, Disk ${metricValue(row, 'disk_util')}`"
+              >
+                <span class="matrix-label">{{ row.hostid }}</span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="noc-col noc-col-right">
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>网络流量 24H</h2>
+              <span>Network Traffic 24H</span>
+            </div>
+            <div
+              ref="networkChartRef"
+              class="chart"
+            />
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>磁盘读写 TOP10</h2>
+              <span>Disk Read/Write TOP10</span>
+            </div>
+            <div
+              ref="diskTopChartRef"
+              class="chart"
+            />
+          </article>
+          <article class="panel panel-alarm">
+            <div class="panel-heading">
+              <h2>实时告警流</h2>
+              <span>Live Alarm Stream</span>
+            </div>
+            <div class="alarm-scroll">
+              <div
+                v-for="(alarm, i) in alarmStream"
+                :key="i"
+                :class="['alarm-item', `alarm-${alarm.severity}`]"
+              >
+                <span class="alarm-severity">{{ alarm.severity === 'critical' ? '!!' : '!' }}</span>
+                <span class="alarm-host">{{ alarm.hostid }}</span>
+                <span class="alarm-type">{{ alarm.type }}</span>
+                <span class="alarm-value">{{ alarm.value }}</span>
+              </div>
+              <div
+                v-if="alarmStream.length === 0"
+                class="alarm-empty"
+              >
+                暂无活跃告警
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
     </template>
   </main>
