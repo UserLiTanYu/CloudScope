@@ -59,7 +59,8 @@ def transform_tsar(row: dict[str, str]) -> TsarRecord:
     try:
         value = Decimal(_required(row, "value"))
     except InvalidOperation as exc:
-        raise ValueError(f"Invalid value at line {row.get('_line_number')}: {row.get('value')}") from exc
+        line_number = row.get("_line_number")
+        raise ValueError(f"Invalid value at line {line_number}: {row.get('value')}") from exc
 
     return TsarRecord(
         ts=ts,

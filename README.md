@@ -141,3 +141,9 @@ npm run build
 ```text
 logs/cloudscope.log
 ```
+
+本项目 Docker MySQL 默认发布到宿主机：
+
+```text
+127.0.0.1:3307
+```

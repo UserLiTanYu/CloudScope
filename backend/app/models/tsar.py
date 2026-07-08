@@ -20,8 +20,13 @@ class TsarDetail(Base):
     ts: Mapped[int] = mapped_column(nullable=False)
     collect_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     hostid: Mapped[str] = mapped_column(ForeignKey("host_detail.hostid"), nullable=False)
-    type: Mapped[str] = mapped_column(String(16), nullable=False)
-    mod: Mapped[str] = mapped_column(ForeignKey("mod_detail.mod"), nullable=False)
+    type: Mapped[str] = mapped_column("type", String(16), nullable=False, quote=True)
+    mod: Mapped[str] = mapped_column(
+        "mod",
+        ForeignKey("mod_detail.mod"),
+        nullable=False,
+        quote=True,
+    )
     value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     tag: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

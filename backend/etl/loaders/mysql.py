@@ -1,5 +1,5 @@
+from collections.abc import Iterable
 from dataclasses import asdict
-from typing import Iterable
 
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.orm import Session

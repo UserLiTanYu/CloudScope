@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -6,10 +8,11 @@ from app.schemas.metrics import MetricSeriesResponse, OverviewResponse
 from app.services.metrics import MetricsService
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
+DbSession = Annotated[Session, Depends(get_db)]
 
 
 @router.get("/overview", response_model=OverviewResponse)
-def overview(db: Session = Depends(get_db)) -> OverviewResponse:
+def overview(db: DbSession) -> OverviewResponse:
     return MetricsService(db).overview()
 
 
@@ -17,7 +20,7 @@ def overview(db: Session = Depends(get_db)) -> OverviewResponse:
 def series(
     hostid: str,
     mod: str,
-    limit: int = Query(default=200, ge=1, le=2000),
-    db: Session = Depends(get_db),
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 200,
 ) -> MetricSeriesResponse:
     return MetricsService(db).series(hostid=hostid, mod=mod, limit=limit)
