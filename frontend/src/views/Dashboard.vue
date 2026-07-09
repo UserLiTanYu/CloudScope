@@ -64,7 +64,7 @@ let healthGauge: echarts.ECharts | null = null
 let networkChart: echarts.ECharts | null = null
 let diskTopChart: echarts.ECharts | null = null
 let clockInterval: ReturnType<typeof setInterval> | null = null
-let resizeTimeout: ReturnType<typeof setTimeout> | null = null
+const resizeObservers: ResizeObserver[] = []
 
 const summary = computed(() => dashboard.value?.summary ?? [])
 const hostHealthAll = computed(() => dashboard.value?.host_health ?? [])
@@ -218,17 +218,16 @@ function healthClass(row: HostHealthRow): string {
   return 'healthy'
 }
 
-const chartInstances = computed(() =>
-  [
-    idcDistChart,
-    hwModelChart,
-    riskRankChart,
-    trendChart,
-    healthGauge,
-    networkChart,
-    diskTopChart,
-  ].filter(Boolean) as echarts.ECharts[],
-)
+function observeResize(el: HTMLDivElement, getChart: () => echarts.ECharts | null): void {
+  const observer = new ResizeObserver(() => {
+    const chart = getChart()
+    if (chart && !chart.isDisposed()) {
+      chart.resize()
+    }
+  })
+  observer.observe(el)
+  resizeObservers.push(observer)
+}
 
 function renderCharts(): void {
   if (!dashboard.value) return
@@ -507,21 +506,21 @@ function renderCharts(): void {
   }
 }
 
-function resizeCharts(): void {
-  if (resizeTimeout) clearTimeout(resizeTimeout)
-  resizeTimeout = setTimeout(() => {
-    for (const chart of chartInstances.value) {
-      chart.resize()
-    }
-  }, 200)
-}
-
 onMounted(async () => {
   try {
     dashboard.value = await fetchDashboard()
     await nextTick()
     renderCharts()
-    window.addEventListener('resize', resizeCharts)
+
+    // Set up ResizeObservers for each chart container
+    if (idcDistChartRef.value) observeResize(idcDistChartRef.value, () => idcDistChart)
+    if (hwModelChartRef.value) observeResize(hwModelChartRef.value, () => hwModelChart)
+    if (riskRankChartRef.value) observeResize(riskRankChartRef.value, () => riskRankChart)
+    if (trendChartRef.value) observeResize(trendChartRef.value, () => trendChart)
+    if (healthGaugeRef.value) observeResize(healthGaugeRef.value, () => healthGauge)
+    if (networkChartRef.value) observeResize(networkChartRef.value, () => networkChart)
+    if (diskTopChartRef.value) observeResize(diskTopChartRef.value, () => diskTopChart)
+
     clockInterval = setInterval(() => {
       currentTime.value = new Date().toLocaleString('zh-CN', { hour12: false })
     }, 1000)
@@ -533,9 +532,15 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeCharts)
   if (clockInterval) clearInterval(clockInterval)
-  if (resizeTimeout) clearTimeout(resizeTimeout)
+
+  // Clean up ResizeObservers
+  for (const observer of resizeObservers) {
+    observer.disconnect()
+  }
+  resizeObservers.length = 0
+
+  // Dispose ECharts instances
   idcDistChart?.dispose()
   hwModelChart?.dispose()
   riskRankChart?.dispose()
@@ -579,67 +584,97 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <section class="noc-grid">
-        <!-- LEFT COLUMN -->
-        <div class="noc-col noc-col-left">
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>机房分布</h2>
-              <span>IDC Distribution</span>
-            </div>
-            <div
-              ref="idcDistChartRef"
-              class="chart"
-            />
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>硬件型号分布</h2>
-              <span>Server Models</span>
-            </div>
-            <div
-              ref="hwModelChartRef"
-              class="chart"
-            />
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>风险排行 TOP10</h2>
-              <span>Risk Ranking</span>
-            </div>
-            <div
-              ref="riskRankChartRef"
-              class="chart"
-            />
-          </article>
-        </div>
+        <!-- Row 1, Col 1: IDC Distribution -->
+        <article class="panel" style="grid-area: idcDistribution">
+          <div class="panel-heading">
+            <h2>机房分布</h2>
+            <span>IDC Distribution</span>
+          </div>
+          <div
+            ref="idcDistChartRef"
+            class="chart-area"
+          />
+        </article>
 
-        <!-- CENTER COLUMN -->
-        <div class="noc-col noc-col-center">
-          <article class="panel panel-tall">
-            <div class="panel-heading">
-              <h2>核心指标 7 日走势</h2>
-              <span>7 Days x 24 Hours Trend</span>
-            </div>
-            <div
-              ref="trendChartRef"
-              class="chart chart-tall"
-            />
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>今日健康仪表盘</h2>
-              <span>Health Gauge</span>
-            </div>
-            <div
-              ref="healthGaugeRef"
-              class="chart"
-            />
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>主机健康矩阵</h2>
-              <span>Host Health Matrix</span>
-            </div>
+        <!-- Row 1, Col 2: Core Metrics 7-Day Trend -->
+        <article class="panel" style="grid-area: coreTrend">
+          <div class="panel-heading">
+            <h2>核心指标 7 日走势</h2>
+            <span>7 Days x 24 Hours Trend</span>
+          </div>
+          <div
+            ref="trendChartRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 1, Col 3: Network Traffic 24H -->
+        <article class="panel" style="grid-area: networkTraffic">
+          <div class="panel-heading">
+            <h2>网络流量 24H</h2>
+            <span>Network Traffic 24H</span>
+          </div>
+          <div
+            ref="networkChartRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 2, Col 1: Server Models -->
+        <article class="panel" style="grid-area: serverModels">
+          <div class="panel-heading">
+            <h2>硬件型号分布</h2>
+            <span>Server Models</span>
+          </div>
+          <div
+            ref="hwModelChartRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 2, Col 2: Health Gauge -->
+        <article class="panel" style="grid-area: healthGauge">
+          <div class="panel-heading">
+            <h2>今日健康仪表盘</h2>
+            <span>Health Gauge</span>
+          </div>
+          <div
+            ref="healthGaugeRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 2, Col 3: Disk TOP10 -->
+        <article class="panel" style="grid-area: diskTop10">
+          <div class="panel-heading">
+            <h2>磁盘读写 TOP10</h2>
+            <span>Disk Read/Write TOP10</span>
+          </div>
+          <div
+            ref="diskTopChartRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 3, Col 1: Risk Ranking TOP10 -->
+        <article class="panel" style="grid-area: riskRanking">
+          <div class="panel-heading">
+            <h2>风险排行 TOP10</h2>
+            <span>Risk Ranking</span>
+          </div>
+          <div
+            ref="riskRankChartRef"
+            class="chart-area"
+          />
+        </article>
+
+        <!-- Row 3, Col 2: Host Health Matrix -->
+        <article class="panel panel-matrix" style="grid-area: hostHealthMatrix">
+          <div class="panel-heading">
+            <h2>主机健康矩阵</h2>
+            <span>Host Health Matrix</span>
+          </div>
+          <div class="matrix-scroll">
             <div class="host-matrix-grid">
               <div
                 v-for="row in hostHealthAll"
@@ -650,56 +685,34 @@ onBeforeUnmount(() => {
                 <span class="matrix-label">{{ row.hostid }}</span>
               </div>
             </div>
-          </article>
-        </div>
+          </div>
+        </article>
 
-        <!-- RIGHT COLUMN -->
-        <div class="noc-col noc-col-right">
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>网络流量 24H</h2>
-              <span>Network Traffic 24H</span>
+        <!-- Row 3, Col 3: Alarm Stream -->
+        <article class="panel panel-alarm" style="grid-area: alarmStream">
+          <div class="panel-heading">
+            <h2>实时告警流</h2>
+            <span>Live Alarm Stream</span>
+          </div>
+          <div class="alarm-scroll">
+            <div
+              v-for="(alarm, i) in alarmStream"
+              :key="i"
+              :class="['alarm-item', `alarm-${alarm.severity}`]"
+            >
+              <span class="alarm-severity">{{ alarm.severity === 'critical' ? '!!' : '!' }}</span>
+              <span class="alarm-host">{{ alarm.hostid }}</span>
+              <span class="alarm-type">{{ alarm.type }}</span>
+              <span class="alarm-value">{{ alarm.value }}</span>
             </div>
             <div
-              ref="networkChartRef"
-              class="chart"
-            />
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>磁盘读写 TOP10</h2>
-              <span>Disk Read/Write TOP10</span>
+              v-if="alarmStream.length === 0"
+              class="alarm-empty"
+            >
+              暂无活跃告警
             </div>
-            <div
-              ref="diskTopChartRef"
-              class="chart"
-            />
-          </article>
-          <article class="panel panel-alarm">
-            <div class="panel-heading">
-              <h2>实时告警流</h2>
-              <span>Live Alarm Stream</span>
-            </div>
-            <div class="alarm-scroll">
-              <div
-                v-for="(alarm, i) in alarmStream"
-                :key="i"
-                :class="['alarm-item', `alarm-${alarm.severity}`]"
-              >
-                <span class="alarm-severity">{{ alarm.severity === 'critical' ? '!!' : '!' }}</span>
-                <span class="alarm-host">{{ alarm.hostid }}</span>
-                <span class="alarm-type">{{ alarm.type }}</span>
-                <span class="alarm-value">{{ alarm.value }}</span>
-              </div>
-              <div
-                v-if="alarmStream.length === 0"
-                class="alarm-empty"
-              >
-                暂无活跃告警
-              </div>
-            </div>
-          </article>
-        </div>
+          </div>
+        </article>
       </section>
     </template>
   </main>
